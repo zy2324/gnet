@@ -247,16 +247,6 @@ func parseAddr(addr string) (network, address string) {
 	return
 }
 
-type listener struct {
-	ln      net.Listener
-	lnaddr  net.Addr
-	pconn   net.PacketConn
-	f       *os.File
-	fd      int
-	network string
-	addr    string
-}
-
 func sniffError(err error) {
 	if err != nil {
 		log.Println(err)
