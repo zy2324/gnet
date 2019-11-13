@@ -78,6 +78,8 @@ func (lp *loop) loopRun() {
 				err = lp.loopError(v.c, v.err)
 			case wakeReq:
 				err = lp.loopRead(v.c)
+			case func():
+				v()
 			}
 		}
 		if err != nil {
@@ -92,7 +94,7 @@ func (lp *loop) loopAccept(c *stdConn) error {
 	c.remoteAddr = c.conn.RemoteAddr()
 
 	out, action := lp.svr.eventHandler.OnOpened(c)
-	if len(out) > 0 {
+	if out != nil {
 		lp.svr.eventHandler.PreWrite()
 		_, _ = c.conn.Write(out)
 	}
@@ -177,7 +179,7 @@ func (lp *loop) loopError(c *stdConn, err error) error {
 
 func (lp *loop) loopReadUDP(c *stdConn) error {
 	out, action := lp.svr.eventHandler.React(c)
-	if len(out) > 0 {
+	if out != nil {
 		lp.svr.eventHandler.PreWrite()
 		_, _ = lp.svr.ln.pconn.WriteTo(out, c.remoteAddr)
 	}
