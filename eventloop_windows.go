@@ -26,7 +26,7 @@ func (lp *loop) loopRun() {
 	tick := make(chan bool)
 	tock := make(chan time.Duration)
 	defer func() {
-		if lp.idx == 0 && lp.svr.eventHandler.Tick != nil {
+		if lp.idx == 0 && lp.svr.opts.Ticker {
 			close(tock)
 			go func() {
 				for range tick {
@@ -38,7 +38,7 @@ func (lp *loop) loopRun() {
 		lp.loopEgress()
 		lp.svr.wg.Done()
 	}()
-	if lp.idx == 0 && lp.svr.eventHandler.Tick != nil {
+	if lp.idx == 0 && lp.svr.opts.Ticker {
 		go func() {
 			for {
 				tick <- true
