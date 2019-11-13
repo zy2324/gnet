@@ -116,7 +116,7 @@ func serve(eventHandler EventHandler, listener *listener, options *Options) erro
 		svr.wg.Wait()
 
 		// close all connections
-		svr.wg.Add(svr.subLoopGroup.len())
+		svr.wg.Add(svr.subLoopGroupSize)
 		svr.subLoopGroup.iterate(func(i int, lp *loop) bool {
 			lp.ch <- errCloseConns
 			return true
@@ -124,13 +124,11 @@ func serve(eventHandler EventHandler, listener *listener, options *Options) erro
 		svr.wg.Wait()
 
 	}()
-	svr.wg.Add(numCPU)
-	for i := 0; i < numCPU; i++ {
-		svr.subLoopGroup.iterate(func(i int, lp *loop) bool {
-			go lp.loopRun()
-			return true
-		})
-	}
+	svr.wg.Add(svr.subLoopGroupSize)
+	svr.subLoopGroup.iterate(func(i int, lp *loop) bool {
+		go lp.loopRun()
+		return true
+	})
 	go svr.listenerRun()
 	return err
 }

@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -211,13 +212,13 @@ func Serve(eventHandler EventHandler, addr string, opts ...Option) error {
 	}
 	var err error
 	if ln.network == "udp" {
-		if options.ReusePort {
+		if options.ReusePort && runtime.GOOS != "windows" {
 			ln.pconn, err = netpoll.ReusePortListenPacket(ln.network, ln.addr)
 		} else {
 			ln.pconn, err = net.ListenPacket(ln.network, ln.addr)
 		}
 	} else {
-		if options.ReusePort {
+		if options.ReusePort && runtime.GOOS != "windows" {
 			ln.ln, err = netpoll.ReusePortListen(ln.network, ln.addr)
 		} else {
 			ln.ln, err = net.Listen(ln.network, ln.addr)
