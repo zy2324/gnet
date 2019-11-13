@@ -93,7 +93,7 @@ func serve(eventHandler EventHandler, listener *listener, options *Options) erro
 	for i := 0; i < numCPU; i++ {
 		lp := &loop{
 			idx:   i,
-			ch:    make(chan interface{}),
+			ch:    make(chan interface{}, 64),
 			conns: make(map[*stdConn]bool),
 			svr:   svr,
 		}

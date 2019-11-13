@@ -22,7 +22,7 @@ func (svr *server) listenerRun() {
 		if svr.ln.pconn != nil {
 			// udp
 			n, addr, e := svr.ln.pconn.ReadFrom(packet[:])
-			if err != nil {
+			if e != nil {
 				err = e
 				return
 			}
@@ -37,7 +37,7 @@ func (svr *server) listenerRun() {
 		} else {
 			// tcp
 			conn, e := svr.ln.ln.Accept()
-			if err != nil {
+			if e != nil {
 				err = e
 				return
 			}

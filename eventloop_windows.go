@@ -177,7 +177,7 @@ func (lp *loop) loopError(c *stdConn, err error) error {
 }
 
 func (lp *loop) loopWake(c *stdConn) error {
-	if v, ok := lp.conns[c]; !ok || !v {
+	if _, ok := lp.conns[c]; !ok {
 		return nil // ignore stale wakes.
 	}
 	out, action := lp.svr.eventHandler.React(c)
