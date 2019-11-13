@@ -69,6 +69,7 @@ func serve(eventHandler EventHandler, listener *listener, options *Options) erro
 	svr.ln = listener
 	svr.cond = sync.NewCond(&sync.Mutex{})
 	svr.opts = options
+	svr.subLoopGroup = new(eventLoopGroup)
 	svr.codec = func() ICodec {
 		if options.Codec == nil {
 			return new(BuiltInFrameCodec)
@@ -94,9 +95,12 @@ func serve(eventHandler EventHandler, listener *listener, options *Options) erro
 			idx:   i,
 			ch:    make(chan interface{}),
 			conns: make(map[*stdConn]bool),
+			svr:   svr,
 		}
 		svr.subLoopGroup.register(lp)
 	}
+	svr.subLoopGroupSize = svr.subLoopGroup.len()
+
 	var err error
 	defer func() {
 		// wait on a signal for shutdown

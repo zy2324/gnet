@@ -118,7 +118,9 @@ loopReact:
 	out, action := lp.svr.eventHandler.React(c)
 	if len(out) != 0 {
 		lp.svr.eventHandler.PreWrite()
-		_, _ = c.conn.Write(out)
+		if frame, err := lp.svr.codec.Encode(out); err == nil {
+			_, _ = c.conn.Write(frame)
+		}
 		goto loopReact
 	}
 	_, _ = c.inboundBuffer.Write(c.cache)
