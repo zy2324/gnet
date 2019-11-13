@@ -117,8 +117,9 @@ func (c *stdConn) BufferLength() int {
 func (c *stdConn) AsyncWrite(buf []byte) {
 	if encodedBuf, err := c.loop.svr.codec.Encode(buf); err == nil {
 		if c.loop != nil {
-			c.loop.ch <- func() {
-				_, _ = c.conn.Write(encodedBuf)
+			c.loop.ch <- func() error {
+				_, err = c.conn.Write(encodedBuf)
+				return err
 			}
 		}
 	}

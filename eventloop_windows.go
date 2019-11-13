@@ -23,15 +23,9 @@ type loop struct {
 
 func (lp *loop) loopRun() {
 	var err error
-	tick := make(chan bool)
-	tock := make(chan time.Duration)
 	defer func() {
 		if lp.idx == 0 && lp.svr.opts.Ticker {
-			close(tock)
-			go func() {
-				for range tick {
-				}
-			}()
+			close(lp.svr.ticktock)
 		}
 		lp.svr.signalShutdown(err)
 		lp.svr.wg.Done()
@@ -39,43 +33,24 @@ func (lp *loop) loopRun() {
 		lp.svr.wg.Done()
 	}()
 	if lp.idx == 0 && lp.svr.opts.Ticker {
-		go func() {
-			for {
-				tick <- true
-				delay, ok := <-tock
-				if !ok {
-					break
-				}
-				time.Sleep(delay)
-			}
-		}()
+		go lp.loopTicker()
 	}
-	for {
-		select {
-		case <-tick:
-			delay, action := lp.svr.eventHandler.Tick()
-			switch action {
-			case Shutdown:
-				err = errClosing
-			}
-			tock <- delay
-		case v := <-lp.ch:
-			switch v := v.(type) {
-			case error:
-				err = v
-			case *stdConn:
-				err = lp.loopAccept(v)
-			case *tcpIn:
-				err = lp.loopRead(v)
-			case *udpIn:
-				err = lp.loopReadUDP(v.c)
-			case *stderr:
-				err = lp.loopError(v.c, v.err)
-			case wakeReq:
-				err = lp.loopWake(v.c)
-			case func():
-				v()
-			}
+	for v := range lp.ch {
+		switch v := v.(type) {
+		case error:
+			err = v
+		case *stdConn:
+			err = lp.loopAccept(v)
+		case *tcpIn:
+			err = lp.loopRead(v)
+		case *udpIn:
+			err = lp.loopReadUDP(v.c)
+		case *stderr:
+			err = lp.loopError(v.c, v.err)
+		case wakeReq:
+			err = lp.loopWake(v.c)
+		case func() error:
+			err = v()
 		}
 		if err != nil {
 			return
@@ -157,16 +132,34 @@ loop:
 	}
 }
 
+func (lp *loop) loopTicker() {
+	for {
+		lp.ch <- func() (err error) {
+			delay, action := lp.svr.eventHandler.Tick()
+			lp.svr.ticktock <- delay
+			switch action {
+			case Shutdown:
+				err = errClosing
+			}
+			return
+		}
+		delay, ok := <-lp.svr.ticktock
+		if !ok {
+			break
+		}
+		time.Sleep(delay)
+	}
+}
+
 func (lp *loop) loopError(c *stdConn, err error) error {
 	delete(lp.conns, c)
+	_ = c.conn.Close()
 	switch atomic.LoadInt32(&c.done) {
 	case 0: // read error
-		_ = c.conn.Close()
 		if err == io.EOF {
 			err = nil
 		}
 	case 1: // closed
-		_ = c.conn.Close()
 		err = nil
 	}
 	switch lp.svr.eventHandler.OnClosed(c, err) {

@@ -11,24 +11,26 @@ import (
 	"errors"
 	"runtime"
 	"sync"
+	"time"
 )
 
 var errClosing = errors.New("closing")
 var errCloseConns = errors.New("close conns")
 
 type server struct {
-	ln               *listener       // all the listeners
-	wg               sync.WaitGroup  // loop close waitgroup
-	cond             *sync.Cond      // shutdown signaler
-	opts             *Options        // options with server
-	serr             error           // signal error
-	once             sync.Once       // make sure only signalShutdown once
-	codec            ICodec          // codec for TCP stream
-	loops            []*loop         // all the loops
-	accepted         uintptr         // accept counter
-	eventHandler     EventHandler    // user eventHandler
-	subLoopGroup     IEventLoopGroup // loops for handling events
-	subLoopGroupSize int             // number of loops
+	ln               *listener          // all the listeners
+	wg               sync.WaitGroup     // loop close waitgroup
+	cond             *sync.Cond         // shutdown signaler
+	opts             *Options           // options with server
+	serr             error              // signal error
+	once             sync.Once          // make sure only signalShutdown once
+	codec            ICodec             // codec for TCP stream
+	loops            []*loop            // all the loops
+	ticktock         chan time.Duration // ticker channel
+	accepted         uintptr            // accept counter
+	eventHandler     EventHandler       // user eventHandler
+	subLoopGroup     IEventLoopGroup    // loops for handling events
+	subLoopGroupSize int                // number of loops
 }
 
 type stderr struct {
@@ -68,6 +70,7 @@ func serve(eventHandler EventHandler, listener *listener, options *Options) erro
 	svr.eventHandler = eventHandler
 	svr.ln = listener
 	svr.cond = sync.NewCond(&sync.Mutex{})
+	svr.ticktock = make(chan time.Duration, 1)
 	svr.opts = options
 	svr.subLoopGroup = new(eventLoopGroup)
 	svr.codec = func() ICodec {
