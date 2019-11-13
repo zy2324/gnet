@@ -66,10 +66,10 @@ func (lp *loop) loopRun() {
 			case *stdConn:
 				switch v.proto {
 				case TCP:
-					if len(v.cache) == 0 {
-						err = lp.loopAccept(v)
-					} else {
+					if v.opened {
 						err = lp.loopRead(v)
+					} else {
+						err = lp.loopAccept(v)
 					}
 				case UDP:
 					err = lp.loopReadUDP(v)
@@ -90,6 +90,7 @@ func (lp *loop) loopRun() {
 
 func (lp *loop) loopAccept(c *stdConn) error {
 	lp.conns[c] = true
+	c.opened = true
 	c.localAddr = lp.svr.ln.lnaddr
 	c.remoteAddr = c.conn.RemoteAddr()
 

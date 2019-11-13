@@ -30,7 +30,8 @@ type stdConn struct {
 	loop           *loop       // owner loop
 	done           int32       // 0: attached, 1: closed
 	cache          []byte      // reuse memory of inbound data
-	proto          Proto
+	opened         bool        // connection opened event fired
+	proto          Proto       // TCP or UDP
 	localAddr      net.Addr
 	remoteAddr     net.Addr
 	inboundBuffer  *ringbuffer.RingBuffer // buffer for data from client
