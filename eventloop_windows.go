@@ -64,20 +64,15 @@ func (lp *loop) loopRun() {
 			case error:
 				err = v
 			case *stdConn:
-				switch v.proto {
-				case TCP:
-					if v.opened {
-						err = lp.loopRead(v)
-					} else {
-						err = lp.loopAccept(v)
-					}
-				case UDP:
-					err = lp.loopReadUDP(v)
-				}
+				err = lp.loopAccept(v)
+			case *tcpIn:
+				err = lp.loopRead(v)
+			case *udpIn:
+				err = lp.loopReadUDP(v.c)
 			case *stderr:
 				err = lp.loopError(v.c, v.err)
 			case wakeReq:
-				err = lp.loopRead(v.c)
+				err = lp.loopWake(v.c)
 			case func():
 				v()
 			}
@@ -90,7 +85,6 @@ func (lp *loop) loopRun() {
 
 func (lp *loop) loopAccept(c *stdConn) error {
 	lp.conns[c] = true
-	c.opened = true
 	c.localAddr = lp.svr.ln.lnaddr
 	c.remoteAddr = c.conn.RemoteAddr()
 
@@ -114,7 +108,9 @@ func (lp *loop) loopAccept(c *stdConn) error {
 	return nil
 }
 
-func (lp *loop) loopRead(c *stdConn) error {
+func (lp *loop) loopRead(ti *tcpIn) error {
+	c := ti.c
+	c.cache = ti.in
 loopReact:
 	out, action := lp.svr.eventHandler.React(c)
 	if len(out) != 0 {
@@ -176,6 +172,23 @@ func (lp *loop) loopError(c *stdConn, err error) error {
 	switch lp.svr.eventHandler.OnClosed(c, err) {
 	case Shutdown:
 		return errClosing
+	}
+	return nil
+}
+
+func (lp *loop) loopWake(c *stdConn) error {
+	if v, ok := lp.conns[c]; !ok || !v {
+		return nil // ignore stale wakes.
+	}
+	out, action := lp.svr.eventHandler.React(c)
+	if out != nil {
+		_, _ = c.conn.Write(out)
+	}
+	switch action {
+	case Shutdown:
+		return errClosing
+	case Close:
+		return lp.loopClose(c)
 	}
 	return nil
 }

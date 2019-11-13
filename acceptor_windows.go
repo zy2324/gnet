@@ -17,6 +17,7 @@ func (svr *server) listenerRun() {
 	var err error
 	defer svr.signalShutdown(err)
 	var packet [0xFFFF]byte
+	inBuf := ringbuffer.New(socketRingBufferSize)
 	for {
 		if svr.ln.pconn != nil {
 			// udp
@@ -29,10 +30,10 @@ func (svr *server) listenerRun() {
 			c := &stdConn{
 				localAddr:     svr.ln.lnaddr,
 				remoteAddr:    addr,
-				inboundBuffer: ringbuffer.New(socketRingBufferSize),
+				inboundBuffer: inBuf,
+				cache:         append([]byte{}, packet[:n]...),
 			}
-			c.cache = packet[:n]
-			lp.ch <- c
+			lp.ch <- &udpIn{c}
 		} else {
 			// tcp
 			conn, e := svr.ln.ln.Accept()
@@ -52,8 +53,7 @@ func (svr *server) listenerRun() {
 						lp.ch <- &stderr{c, err}
 						return
 					}
-					c.cache = packet[:n]
-					lp.ch <- c
+					lp.ch <- &tcpIn{c, append([]byte{}, packet[:n]...)}
 				}
 			}(sc)
 		}

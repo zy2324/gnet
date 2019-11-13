@@ -24,14 +24,21 @@ type wakeReq struct {
 	c *stdConn
 }
 
+type tcpIn struct {
+	c  *stdConn
+	in []byte
+}
+
+type udpIn struct {
+	c *stdConn
+}
+
 type stdConn struct {
 	ctx            interface{} // user-defined context
 	conn           net.Conn    // original connection
 	loop           *loop       // owner loop
 	done           int32       // 0: attached, 1: closed
 	cache          []byte      // reuse memory of inbound data
-	opened         bool        // connection opened event fired
-	proto          Proto       // TCP or UDP
 	localAddr      net.Addr
 	remoteAddr     net.Addr
 	inboundBuffer  *ringbuffer.RingBuffer // buffer for data from client
