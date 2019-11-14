@@ -8,17 +8,16 @@
 package gnet
 
 import (
+	"github.com/panjf2000/gnet/pool"
 	"net"
 
 	"github.com/panjf2000/gnet/ringbuffer"
 )
 
-type Proto int
-
-const (
-	TCP = iota
-	UDP
-)
+type stderr struct {
+	c   *stdConn
+	err error
+}
 
 type wakeReq struct {
 	c *stdConn
@@ -34,15 +33,34 @@ type udpIn struct {
 }
 
 type stdConn struct {
-	ctx            interface{} // user-defined context
-	conn           net.Conn    // original connection
-	loop           *loop       // owner loop
-	done           int32       // 0: attached, 1: closed
-	cache          []byte      // reuse memory of inbound data
-	localAddr      net.Addr
-	remoteAddr     net.Addr
-	inboundBuffer  *ringbuffer.RingBuffer // buffer for data from client
-	outboundBuffer *ringbuffer.RingBuffer // buffer for data that is ready to write to client
+	ctx           interface{}            // user-defined context
+	conn          net.Conn               // original connection
+	loop          *loop                  // owner loop
+	done          int32                  // 0: attached, 1: closed
+	cache         []byte                 // reuse memory of inbound data
+	localAddr     net.Addr               // local server addr
+	remoteAddr    net.Addr               // remote peer addr
+	inboundBuffer *ringbuffer.RingBuffer // buffer for data from client
+}
+
+func newConn(conn net.Conn, lp *loop) *stdConn {
+	return &stdConn{
+		conn:          conn,
+		loop:          lp,
+		inboundBuffer: lp.svr.bytesPool.Get().(*ringbuffer.RingBuffer),
+	}
+}
+
+func (c *stdConn) release() {
+	//c.conn = nil
+	c.ctx = nil
+	c.localAddr = nil
+	c.remoteAddr = nil
+	c.inboundBuffer.Reset()
+	c.loop.svr.bytesPool.Put(c.inboundBuffer)
+	c.inboundBuffer = nil
+	pool.PutBytes(c.cache)
+	c.cache = nil
 }
 
 // ================================= Public APIs of gnet.Conn =================================
@@ -107,7 +125,7 @@ func (c *stdConn) InboundBuffer() *ringbuffer.RingBuffer {
 }
 
 func (c *stdConn) OutboundBuffer() *ringbuffer.RingBuffer {
-	return c.outboundBuffer
+	return nil
 }
 
 func (c *stdConn) BufferLength() int {
@@ -116,11 +134,9 @@ func (c *stdConn) BufferLength() int {
 
 func (c *stdConn) AsyncWrite(buf []byte) {
 	if encodedBuf, err := c.loop.svr.codec.Encode(buf); err == nil {
-		if c.loop != nil {
-			c.loop.ch <- func() error {
-				_, err = c.conn.Write(encodedBuf)
-				return err
-			}
+		c.loop.ch <- func() error {
+			_, _ = c.conn.Write(encodedBuf)
+			return nil
 		}
 	}
 }

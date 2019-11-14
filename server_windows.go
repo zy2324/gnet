@@ -9,6 +9,8 @@ package gnet
 
 import (
 	"errors"
+	"github.com/panjf2000/gnet/ringbuffer"
+	"log"
 	"runtime"
 	"sync"
 	"time"
@@ -19,26 +21,22 @@ var errCloseConns = errors.New("close conns")
 
 type server struct {
 	ln               *listener          // all the listeners
-	wg               sync.WaitGroup     // loop close waitgroup
 	cond             *sync.Cond         // shutdown signaler
 	opts             *Options           // options with server
 	serr             error              // signal error
 	once             sync.Once          // make sure only signalShutdown once
 	codec            ICodec             // codec for TCP stream
 	loops            []*loop            // all the loops
+	loopWG           sync.WaitGroup     // loop close WaitGroup
 	ticktock         chan time.Duration // ticker channel
-	accepted         uintptr            // accept counter
+	bytesPool        sync.Pool          // pool for storing bytes
+	listenerWG       sync.WaitGroup     // listener close WaitGroup
 	eventHandler     EventHandler       // user eventHandler
 	subLoopGroup     IEventLoopGroup    // loops for handling events
 	subLoopGroupSize int                // number of loops
 }
 
-type stderr struct {
-	c   *stdConn
-	err error
-}
-
-// waitForShutdown waits for a signal to shutdown
+// waitForShutdown waits for a signal to shutdown.
 func (svr *server) waitForShutdown() error {
 	svr.cond.L.Lock()
 	svr.cond.Wait()
@@ -47,7 +45,7 @@ func (svr *server) waitForShutdown() error {
 	return err
 }
 
-// signalShutdown signals a shutdown an begins server closing
+// signalShutdown signals a shutdown an begins server closing.
 func (svr *server) signalShutdown(err error) {
 	svr.once.Do(func() {
 		svr.cond.L.Lock()
@@ -57,7 +55,60 @@ func (svr *server) signalShutdown(err error) {
 	})
 }
 
-func serve(eventHandler EventHandler, listener *listener, options *Options) error {
+func (svr *server) startListener() {
+	svr.listenerWG.Add(1)
+	go func() {
+		svr.listenerRun()
+		svr.listenerWG.Done()
+	}()
+}
+
+func (svr *server) startLoops(numLoops int) {
+	for i := 0; i < numLoops; i++ {
+		lp := &loop{
+			idx:         i,
+			ch:          make(chan interface{}, 64),
+			connections: make(map[*stdConn]bool),
+			svr:         svr,
+		}
+		svr.subLoopGroup.register(lp)
+	}
+	svr.subLoopGroupSize = svr.subLoopGroup.len()
+	svr.loopWG.Add(svr.subLoopGroupSize)
+	svr.subLoopGroup.iterate(func(i int, lp *loop) bool {
+		go lp.loopRun()
+		return true
+	})
+}
+
+func (svr *server) stop() {
+	// Wait on a signal for shutdown.
+	log.Printf("server is being shutdown with err: %v\n", svr.waitForShutdown())
+
+	// Close listener.
+	svr.ln.close()
+	svr.listenerWG.Wait()
+
+	// Notify all loops to close.
+	svr.subLoopGroup.iterate(func(i int, lp *loop) bool {
+		lp.ch <- errClosing
+		return true
+	})
+
+	// Wait on all loops to close.
+	svr.loopWG.Wait()
+
+	// Close all connections.
+	svr.loopWG.Add(svr.subLoopGroupSize)
+	svr.subLoopGroup.iterate(func(i int, lp *loop) bool {
+		lp.ch <- errCloseConns
+		return true
+	})
+	svr.loopWG.Wait()
+	return
+}
+
+func serve(eventHandler EventHandler, listener *listener, options *Options) (err error) {
 	// Figure out the correct number of loops/goroutines to use.
 	var numCPU int
 	if options.Multicore {
@@ -67,12 +118,15 @@ func serve(eventHandler EventHandler, listener *listener, options *Options) erro
 	}
 
 	svr := new(server)
+	svr.opts = options
 	svr.eventHandler = eventHandler
 	svr.ln = listener
-	svr.cond = sync.NewCond(&sync.Mutex{})
-	svr.ticktock = make(chan time.Duration, 1)
-	svr.opts = options
 	svr.subLoopGroup = new(eventLoopGroup)
+	svr.ticktock = make(chan time.Duration, 1)
+	svr.cond = sync.NewCond(&sync.Mutex{})
+	svr.bytesPool.New = func() interface{} {
+		return ringbuffer.New(socketRingBufferSize)
+	}
 	svr.codec = func() ICodec {
 		if options.Codec == nil {
 			return new(BuiltInFrameCodec)
@@ -90,48 +144,14 @@ func serve(eventHandler EventHandler, listener *listener, options *Options) erro
 	switch svr.eventHandler.OnInitComplete(server) {
 	case None:
 	case Shutdown:
-		return nil
+		return
 	}
 
-	for i := 0; i < numCPU; i++ {
-		lp := &loop{
-			idx:   i,
-			ch:    make(chan interface{}, 64),
-			conns: make(map[*stdConn]bool),
-			svr:   svr,
-		}
-		svr.subLoopGroup.register(lp)
-	}
-	svr.subLoopGroupSize = svr.subLoopGroup.len()
+	// Start all loops.
+	svr.startLoops(numCPU)
+	// Start listener.
+	svr.startListener()
+	defer svr.stop()
 
-	var err error
-	defer func() {
-		// wait on a signal for shutdown
-		err = svr.waitForShutdown()
-
-		// notify all loops to close by closing all listeners
-		svr.subLoopGroup.iterate(func(i int, lp *loop) bool {
-			lp.ch <- errClosing
-			return true
-		})
-
-		// wait on all loops to main loop channel eventHandler
-		svr.wg.Wait()
-
-		// close all connections
-		svr.wg.Add(svr.subLoopGroupSize)
-		svr.subLoopGroup.iterate(func(i int, lp *loop) bool {
-			lp.ch <- errCloseConns
-			return true
-		})
-		svr.wg.Wait()
-
-	}()
-	svr.wg.Add(svr.subLoopGroupSize)
-	svr.subLoopGroup.iterate(func(i int, lp *loop) bool {
-		go lp.loopRun()
-		return true
-	})
-	go svr.listenerRun()
-	return err
+	return
 }

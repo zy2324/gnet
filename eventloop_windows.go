@@ -9,16 +9,17 @@ package gnet
 
 import (
 	"io"
+	"log"
 	"net"
 	"sync/atomic"
 	"time"
 )
 
 type loop struct {
-	ch    chan interface{} // command channel
-	svr   *server
-	idx   int               // loop index
-	conns map[*stdConn]bool // track all the conns bound to this loop
+	ch          chan interface{}  // command channel
+	idx         int               // loop index
+	svr         *server           // server in loop
+	connections map[*stdConn]bool // track all the sockets bound to this loop
 }
 
 func (lp *loop) loopRun() {
@@ -28,9 +29,9 @@ func (lp *loop) loopRun() {
 			close(lp.svr.ticktock)
 		}
 		lp.svr.signalShutdown(err)
-		lp.svr.wg.Done()
+		lp.svr.loopWG.Done()
 		lp.loopEgress()
-		lp.svr.wg.Done()
+		lp.svr.loopWG.Done()
 	}()
 	if lp.idx == 0 && lp.svr.opts.Ticker {
 		go lp.loopTicker()
@@ -59,7 +60,7 @@ func (lp *loop) loopRun() {
 }
 
 func (lp *loop) loopAccept(c *stdConn) error {
-	lp.conns[c] = true
+	lp.connections[c] = true
 	c.localAddr = lp.svr.ln.lnaddr
 	c.remoteAddr = c.conn.RemoteAddr()
 
@@ -113,21 +114,20 @@ func (lp *loop) loopClose(c *stdConn) error {
 
 func (lp *loop) loopEgress() {
 	var closed bool
-loop:
 	for v := range lp.ch {
 		switch v := v.(type) {
 		case error:
 			if v == errCloseConns {
 				closed = true
-				for c := range lp.conns {
+				for c := range lp.connections {
 					_ = lp.loopClose(c)
 				}
 			}
 		case *stderr:
 			_ = lp.loopError(v.c, v.err)
 		}
-		if len(lp.conns) == 0 && closed {
-			break loop
+		if len(lp.connections) == 0 && closed {
+			break
 		}
 	}
 }
@@ -151,26 +151,28 @@ func (lp *loop) loopTicker() {
 	}
 }
 
-func (lp *loop) loopError(c *stdConn, err error) error {
-	delete(lp.conns, c)
-	_ = c.conn.Close()
-	switch atomic.LoadInt32(&c.done) {
-	case 0: // read error
-		if err == io.EOF {
-			err = nil
+func (lp *loop) loopError(c *stdConn, err error) (e error) {
+	if e = c.conn.Close(); e == nil {
+		delete(lp.connections, c)
+		switch atomic.LoadInt32(&c.done) {
+		case 0: // read error
+			if err != io.EOF {
+				log.Printf("socket: %s with err: %v\n", c.remoteAddr.String(), err)
+			}
+		case 1: // closed
+			log.Printf("socket: %s has been closed by client\n", c.remoteAddr.String())
 		}
-	case 1: // closed
-		err = nil
+		switch lp.svr.eventHandler.OnClosed(c, err) {
+		case Shutdown:
+			return errClosing
+		}
+		c.release()
 	}
-	switch lp.svr.eventHandler.OnClosed(c, err) {
-	case Shutdown:
-		return errClosing
-	}
-	return nil
+	return
 }
 
 func (lp *loop) loopWake(c *stdConn) error {
-	if _, ok := lp.conns[c]; !ok {
+	if _, ok := lp.connections[c]; !ok {
 		return nil // ignore stale wakes.
 	}
 	out, action := lp.svr.eventHandler.React(c)
@@ -196,5 +198,6 @@ func (lp *loop) loopReadUDP(c *stdConn) error {
 	case Shutdown:
 		return errClosing
 	}
+	c.release()
 	return nil
 }

@@ -10,6 +10,7 @@ package gnet
 import (
 	"time"
 
+	"github.com/panjf2000/gnet/pool"
 	"github.com/panjf2000/gnet/ringbuffer"
 )
 
@@ -17,34 +18,39 @@ func (svr *server) listenerRun() {
 	var err error
 	defer svr.signalShutdown(err)
 	var packet [0xFFFF]byte
-	inBuf := ringbuffer.New(socketRingBufferSize)
+	inBuf := svr.bytesPool.Get().(*ringbuffer.RingBuffer)
+	bytesPool := pool.NewBytesPool()
 	for {
 		if svr.ln.pconn != nil {
-			// udp
+			// Read data from UDP socket.
 			n, addr, e := svr.ln.pconn.ReadFrom(packet[:])
 			if e != nil {
 				err = e
 				return
 			}
+			buf := bytesPool.GetLen(n)
+			copy(buf, packet[:n])
+
 			lp := svr.subLoopGroup.next()
 			c := &stdConn{
+				loop:          lp,
 				localAddr:     svr.ln.lnaddr,
 				remoteAddr:    addr,
 				inboundBuffer: inBuf,
-				cache:         append([]byte{}, packet[:n]...),
+				cache:         buf,
 			}
 			lp.ch <- &udpIn{c}
 		} else {
-			// tcp
+			// Accept TCP socket.
 			conn, e := svr.ln.ln.Accept()
 			if e != nil {
 				err = e
 				return
 			}
 			lp := svr.subLoopGroup.next()
-			sc := &stdConn{conn: conn, loop: lp, inboundBuffer: ringbuffer.New(socketRingBufferSize)}
-			lp.ch <- sc
-			go func(c *stdConn) {
+			c := newConn(conn, lp)
+			lp.ch <- c
+			go func() {
 				var packet [0xFFFF]byte
 				for {
 					n, err := c.conn.Read(packet[:])
@@ -53,9 +59,11 @@ func (svr *server) listenerRun() {
 						lp.ch <- &stderr{c, err}
 						return
 					}
-					lp.ch <- &tcpIn{c, append([]byte{}, packet[:n]...)}
+					buf := bytesPool.GetLen(n)
+					copy(buf, packet[:n])
+					lp.ch <- &tcpIn{c, buf}
 				}
-			}(sc)
+			}()
 		}
 	}
 }
