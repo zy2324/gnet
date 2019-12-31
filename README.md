@@ -121,6 +121,9 @@ The simplest example to get you started playing with `gnet` would be the echo se
 
 ### Echo server without blocking logic
 
+<details>
+	<summary> Old version(<=v1.0.0-rc.4)  </summary>
+
 ```go
 package main
 
@@ -145,10 +148,38 @@ func main() {
 	log.Fatal(gnet.Serve(echo, "tcp://:9000", gnet.WithMulticore(true)))
 }
 ```
+</details>
+
+```go
+package main
+
+import (
+	"log"
+
+	"github.com/panjf2000/gnet"
+)
+
+type echoServer struct {
+	*gnet.EventServer
+}
+
+func (es *echoServer) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Action) {
+	out = frame
+	return
+}
+
+func main() {
+	echo := new(echoServer)
+	log.Fatal(gnet.Serve(echo, "tcp://:9000", gnet.WithMulticore(true)))
+}
+```
 
 As you can see, this example of echo server only sets up the `EventHandler.React` function where you commonly write your main business code and it will be invoked once the server receives input data from a client. The output data will be then sent back to that client by assigning the `out` variable and return it after your business code finish processing data(in this case, it just echo the data back).
 
 ### Echo server with blocking logic
+
+<details>
+	<summary> Old version(<=v1.0.0-rc.4)  </summary>
 
 ```go
 package main
@@ -183,6 +214,44 @@ func main() {
 	p := goroutine.Default()
 	defer p.Release()
 	
+	echo := &echoServer{pool: p}
+	log.Fatal(gnet.Serve(echo, "tcp://:9000", gnet.WithMulticore(true)))
+}
+```
+</details>
+
+```go
+package main
+
+import (
+	"log"
+	"time"
+
+	"github.com/panjf2000/gnet"
+	"github.com/panjf2000/gnet/pool/goroutine"
+)
+
+type echoServer struct {
+	*gnet.EventServer
+	pool *goroutine.Pool
+}
+
+func (es *echoServer) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Action) {
+	data := append([]byte{}, frame...)
+
+	// Use ants pool to unblock the event-loop.
+	_ = es.pool.Submit(func() {
+		time.Sleep(1 * time.Second)
+		c.AsyncWrite(data)
+	})
+
+	return
+}
+
+func main() {
+	p := goroutine.Default()
+	defer p.Release()
+
 	echo := &echoServer{pool: p}
 	log.Fatal(gnet.Serve(echo, "tcp://:9000", gnet.WithMulticore(true)))
 }
