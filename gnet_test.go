@@ -949,6 +949,9 @@ func (t *testCloseConnectionServer) Tick() (delay time.Duration, action Action) 
 			fmt.Println(string(data))
 			// waiting the server shutdown.
 			_, err = conn.Read(data)
+			if err == nil {
+				panic(err)
+			}
 		}()
 		return
 	}
